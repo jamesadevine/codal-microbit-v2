@@ -168,6 +168,8 @@ static uint8_t scan_buffer[SCAN_BUFFER_SIZE];
 ManagedString matchingDeviceName;
 ManagedBuffer matchingDeviceAddress;
 
+static ble_gap_addr_t targetDeviceAddress;
+
 
 /**
  * Constructor.
@@ -1172,6 +1174,40 @@ int MicroBitBLEManager::listenForDevice(ManagedBuffer macAddress) {
     return startScanning();
 }
 
+int MicroBitBLEManager::connectToDevice(){
+    MICROBIT_DEBUG_DMESG( "connectToDevice");
+
+    if (matchingDeviceAddress.length() != 6) {
+        MICROBIT_DEBUG_DMESG( "No device found to connect to");
+        return DEVICE_INVALID_STATE;
+    }
+
+    // Set up connection parameters
+    ble_gap_conn_params_t conn_params;
+    memset(&conn_params, 0, sizeof(conn_params));
+    conn_params.min_conn_interval = MSEC_TO_UNITS(50, UNIT_1_25_MS); // Minimum connection interval: 50ms
+    conn_params.max_conn_interval = MSEC_TO_UNITS(100, UNIT_1_25_MS); // Maximum connection interval: 100ms
+    conn_params.slave_latency = 0;                                   // No slave latency
+    conn_params.conn_sup_timeout = MSEC_TO_UNITS(4000, UNIT_10_MS);  // Connection supervision timeout: 4s
+
+    ble_gap_scan_params_t scan_params;
+    memset(&scan_params, 0, sizeof(scan_params));
+
+    scan_params.extended = 0;              // Use extended advertising
+    scan_params.active = 1;                // Active scanning (send scan requests)
+    scan_params.filter_policy = BLE_GAP_SCAN_FP_ACCEPT_ALL;  // Accept all advertising packets
+    scan_params.scan_phys = BLE_GAP_PHY_1MBPS;  // Scan on 1 Mbps PHY
+    scan_params.interval = 160;            // Scan interval: 100ms (160 * 0.625ms)
+    scan_params.window = 80;               // Scan window: 50ms (80 * 0.625ms)
+    scan_params.timeout = 0;               // No timeout (scan indefinitely)
+
+
+    // Initiate connection
+    uint32_t err_code = sd_ble_gap_connect(&targetDeviceAddress, &scan_params, &conn_params, microbit_ble_CONN_CFG_TAG);
+    MICROBIT_DEBUG_DMESG( "Connecting to device...");
+    return MICROBIT_BLE_ECHK(err_code);
+}
+
 /**
 * Ensure service changed indication pending for all peers
 */
@@ -1426,12 +1462,14 @@ static void microbit_ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_conte
                 if (field_data != NULL) {
                     ManagedString advName = ManagedString((const char*)field_data, field_data_len);
 
-                    MICROBIT_DEBUG_DMESG("%s [%02X:%02X:%02X:%02X:%02X:%02X]", advName.toCharArray(),
+                    MICROBIT_DEBUG_DMESG("%s [%02X:%02X:%02X:%02Xπ:%02X:%02X]", advName.toCharArray(),
                                  p_adv->peer_addr.addr[5], p_adv->peer_addr.addr[4], p_adv->peer_addr.addr[3],
                                  p_adv->peer_addr.addr[2], p_adv->peer_addr.addr[1], p_adv->peer_addr.addr[0]);
 
                     if (advName == matchingDeviceName) {
                         MICROBIT_DEBUG_DMESG("Matching device name found!\n");
+
+                        targetDeviceAddress = p_adv->peer_addr;
 
                         // store the matching address for later connection
                         matchingDeviceAddress = ManagedBuffer((uint8_t*)p_adv->peer_addr.addr, 6);
@@ -1450,6 +1488,7 @@ static void microbit_ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_conte
                     MICROBIT_DEBUG_DMESG("Matching device address found!");
                     // store the matching name for later use
                     matchingDeviceName = ManagedString((const char*)p_adv->data.p_data, p_adv->data.len);
+                    targetDeviceAddress = p_adv->peer_addr;
                     MicroBitBLEManager::manager->stopScanning();
                     MicroBitEvent(MICROBIT_ID_BLE, MICROBIT_BLE_EVT_DEVICE_FOUND);
                     return;

@@ -129,6 +129,13 @@ class MicroBitBLEManager : public CodalComponent
     int listenForDevice(ManagedString deviceName);
 
     /**
+     * @brief Connect to the device previously listened for using listenForDevice.
+     *
+     * @return int MICROBIT_OK on success, or an error code on failure.
+     */
+    int connectToDevice();
+
+    /**
      * @brief Informs the managed to look for a device with the given name.
      * Will raise an event with MICROBIT_BLE_EVT_DEVICE_FOUND when found.
      *
