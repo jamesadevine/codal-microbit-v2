@@ -101,7 +101,45 @@ class MicroBitBLEManager : public CodalComponent
      * Hence, the init() member function should be used to initialise the BLE stack.
      */
     MicroBitBLEManager();
-    
+
+    /**
+     * @brief Start scanning for BLE devices.
+     *
+     * @return int MICROBIT_OK on success, or an error code on failure.
+     */
+    int startScanning();
+
+    /**
+     * @brief Stop scanning for BLE devices.
+     *
+     * @return int MICROBIT_OK on success, or an error code on failure.
+     */
+    int stopScanning();
+
+    /**
+     * @brief Informs the managed to look for a device with the given name.
+     * Will raise an event with MICROBIT_BLE_EVT_DEVICE_FOUND when found.
+     *
+     * @param deviceName The name of the device to listen for.
+     *
+     * @note only one device can be listened for at a time.
+     *
+     * @return int MICROBIT_OK on success, or an error code on failure.
+     */
+    int listenForDevice(ManagedString deviceName);
+
+    /**
+     * @brief Informs the managed to look for a device with the given name.
+     * Will raise an event with MICROBIT_BLE_EVT_DEVICE_FOUND when found.
+     *
+     * @param macAddress The MAC address of the device to listen for.
+     *
+     * @note only one device can be listened for at a time.
+     *
+     * @return int MICROBIT_OK on success, or an error code on failure.
+     */
+    int listenForDevice(ManagedBuffer macAddress);
+
     /**
      * getInstance
      *
@@ -126,7 +164,7 @@ class MicroBitBLEManager : public CodalComponent
       * @endcode
       */
     void init(ManagedString deviceName, ManagedString serialNumber, EventModel &messageBus, MicroBitStorage &keyValuestorage, bool enableBonding);
-    
+
     /**
      * Change the output power level of the transmitter to the given value.
      *
@@ -193,7 +231,7 @@ class MicroBitBLEManager : public CodalComponent
 	* Stops any currently running BLE advertisements
 	*/
     void stopAdvertising();
-    
+
     /**
      * A member function called on disconnection
      * */
@@ -201,7 +239,7 @@ class MicroBitBLEManager : public CodalComponent
 
     /**
      * Determine if Bluetooth is connected
-     * @return true if connected 
+     * @return true if connected
      */
     bool getConnected();
 
@@ -276,7 +314,7 @@ class MicroBitBLEManager : public CodalComponent
      * Control whether advertising will be restarted on disconnection
      */
     void setAdvertiseOnDisconnect( bool f) { advertiseOnDisconnect = f; }
-    
+
     /**
      * Prepare for shutdown or disabling softdevice by stopping advertising and disconnecting
      *
@@ -293,8 +331,11 @@ class MicroBitBLEManager : public CodalComponent
     * Ensure service changed indication pending for all peers
     */
     void servicesChanged();
-      
+
   private:
+
+
+
     /**
     * Displays the device's ID code as a histogram on the provided MicroBitDisplay instance.
     *
@@ -312,7 +353,7 @@ class MicroBitBLEManager : public CodalComponent
     int pairingStatus;
     ManagedString passKey;
     ManagedString gapName;
-    
+
     unsigned long pairingTime;
     unsigned long shutdownTime;
 

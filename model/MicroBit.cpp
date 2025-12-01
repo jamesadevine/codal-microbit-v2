@@ -267,7 +267,7 @@ int MicroBit::init()
 
             // Start the BLE stack, if it isn't already running.
             bleManager.init( ManagedString( microbit_friendly_name()), getSerial(), messageBus, storage, true);
-            
+
 
 #if CONFIG_ENABLED(MICROBIT_BLE_UTILITY_SERVICE_PAIRING)
             MICROBIT_DEBUG_DMESG( "UTILITY_SERVICE");
@@ -300,7 +300,7 @@ int MicroBit::init()
     // Deschedule for a little while, just to allow for any components that finialise initialisation
     // as a background task, and to allow the power mamanger to repsonse to background events from the KL27
     // before any user code begins running.
-    
+
     sleep(10);
     return DEVICE_OK;
 }

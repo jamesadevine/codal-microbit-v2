@@ -25,6 +25,8 @@ DEALINGS IN THE SOFTWARE.
 
 #include "MicroBitConfig.h"
 
+extern "C" void log_string(const char* str);
+
 #if CONFIG_ENABLED(DEVICE_BLE)
 
 #include "nordic_common.h"
@@ -159,6 +161,13 @@ static void microbit_ble_configureAdvertising( bool connectable, bool discoverab
                                                uint8_t *frameData, uint16_t frameSize);
 #endif
 
+// Buffer for storing advertising reports
+#define SCAN_BUFFER_SIZE 512
+static uint8_t scan_buffer[SCAN_BUFFER_SIZE];
+
+ManagedString matchingDeviceName;
+ManagedBuffer matchingDeviceAddress;
+
 
 /**
  * Constructor.
@@ -174,7 +183,7 @@ MicroBitBLEManager::MicroBitBLEManager(MicroBitStorage &_storage) : storage(&_st
 {
     manager = this;
     this->pairingStatus = 0;
-        
+
 #if CONFIG_ENABLED(MICROBIT_BLE_DFU_SERVICE)
     // Initialize buttonless SVCI bootloader interface before interrupts are enabled
     MICROBIT_BLE_ECHK( ble_dfu_buttonless_async_svci_init());
@@ -193,7 +202,7 @@ MicroBitBLEManager::MicroBitBLEManager() : storage(NULL)
 {
     manager = this;
     this->pairingStatus = 0;
-    
+
 #if CONFIG_ENABLED(MICROBIT_BLE_DFU_SERVICE)
     // Initialize buttonless SVCI bootloader interface before interrupts are enabled
     MICROBIT_BLE_ECHK( ble_dfu_buttonless_async_svci_init());
@@ -235,7 +244,7 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
       return;
 
     MICROBIT_DEBUG_DMESG( "MicroBitBLEManager::init");
-    
+
     MICROBIT_DEBUG_DMESG( "NRF_SDH_BLE_VS_UUID_COUNT = %d", (int) NRF_SDH_BLE_VS_UUID_COUNT);
     MICROBIT_DEBUG_DMESG( "NRF_SDH_BLE_GATTS_ATTR_TAB_SIZE = %x", (int) NRF_SDH_BLE_GATTS_ATTR_TAB_SIZE);
 
@@ -254,15 +263,15 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
 #endif // NRF_LOG_ENABLED
 
     MICROBIT_BLE_ECHK( app_timer_init());
-    
+
     nrf_sdh_soc_init();
-  
+
     // Start the BLE stack.
     uint32_t ram_start = 0;
     MICROBIT_BLE_ECHK( nrf_pwr_mgmt_init());
     MICROBIT_BLE_ECHK( nrf_sdh_enable_request());
     MICROBIT_BLE_ECHK( nrf_sdh_ble_default_cfg_set( microbit_ble_CONN_CFG_TAG, &ram_start));
-    
+
     // set fixed gap name
     gapName = MICROBIT_BLE_MODEL;
     if ( enableBonding || !CONFIG_ENABLED(MICROBIT_BLE_WHITELIST))
@@ -284,7 +293,7 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
     NRF_SDH_BLE_OBSERVER( microbit_ble_observer, microbit_ble_OBSERVER_PRIO, microbit_ble_evt_handler, NULL);
 
     MICROBIT_BLE_ECHK( sd_ble_gap_appearance_set( BLE_APPEARANCE_UNKNOWN));
-    
+
 //#ifdef MICROBIT_V1_MBED_BLE_PATCHES
 //    // Configure the stack to hold onto the CPU during critical timing events.
 //    // mbed-classic performs __disable_irq() calls in its timers that can cause
@@ -298,13 +307,13 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
 //    // Configure for private addresses, so kids' behaviour can't be easily tracked.
 //    ble->gap().setAddress(BLEProtocol::AddressType::RANDOM_PRIVATE_RESOLVABLE, {0});
 //#endif
-    
+
     // Setup our security requirements.
     // @bluetooth_mdw: select either passkey pairing (more secure),
     // "just works" pairing (less secure but nice and simple for the user)
     // or no security
     // Default to passkey pairing with MITM protection
-    
+
     ble_gap_sec_params_t sec_param;
     memset(&sec_param, 0, sizeof(ble_gap_sec_params_t));
 
@@ -383,10 +392,10 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
     gap_conn_params.slave_latency     = 0;
     gap_conn_params.conn_sup_timeout  = 400;    // 4s
     MICROBIT_BLE_ECHK( sd_ble_gap_ppcp_set( &gap_conn_params));
-    
+
     // Set up GATT
     MICROBIT_BLE_ECHK( nrf_ble_gatt_init( &m_gatt, NULL));
-        
+
     if ( enableBonding)
     {
         MICROBIT_DEBUG_DMESG( "enableBonding");
@@ -407,13 +416,13 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
     bool connectable = true;
     bool discoverable = true;
     bool whitelist = false;
-    
+
 #if CONFIG_ENABLED(MICROBIT_BLE_WHITELIST)
     // Configure a whitelist to filter all connection requetss from unbonded devices.
     // Most BLE stacks only permit one connection at a time, so this prevents denial of service attacks.
 //    ble->gap().setScanningPolicyMode(Gap::SCAN_POLICY_IGNORE_WHITELIST);
 //    ble->gap().setAdvertisingPolicyMode(Gap::ADV_POLICY_FILTER_CONN_REQS);
-    
+
     pm_peer_id_t peer_list[ MICROBIT_BLE_MAXIMUM_BONDS];
     uint32_t list_size = MICROBIT_BLE_MAXIMUM_BONDS;
     MICROBIT_BLE_ECHK( pm_peer_id_list( peer_list, &list_size, PM_PEER_ID_INVALID, PM_PEER_ID_LIST_ALL_ID ));
@@ -422,7 +431,7 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
     connectable = discoverable = whitelist = list_size > 0;
     MICROBIT_DEBUG_DMESG( "whitelist size = %d", list_size);
 #endif
-    
+
     // Bring up core BLE services.
 #if CONFIG_ENABLED(MICROBIT_BLE_DFU_SERVICE)
     MICROBIT_DEBUG_DMESG( "DFU_SERVICE");
@@ -463,7 +472,7 @@ void MicroBitBLEManager::init( ManagedString deviceName, ManagedString serialNum
 #endif
 
     servicesChanged();
-    
+
     // Setup advertising.
     microbit_ble_configureAdvertising( connectable, discoverable, whitelist,
                                        MICROBIT_BLE_ADVERTISING_INTERVAL, MICROBIT_BLE_ADVERTISING_TIMEOUT);
@@ -513,11 +522,11 @@ int MicroBitBLEManager::setTransmitPower(int power)
         return DEVICE_INVALID_PARAMETER;
 
     MICROBIT_DEBUG_DMESG( "setTransmitPower %d", power);
-    
+
     m_power = power;
-    
+
     ble_conn_state_for_each_connected( microbit_ble_for_each_connected_tx_power_set, &m_power);
-    
+
     if ( m_adv_handle != BLE_GAP_ADV_SET_HANDLE_NOT_SET)
     {
         MICROBIT_DEBUG_DMESG( " BLE_GAP_TX_POWER_ROLE_ADV");
@@ -548,7 +557,7 @@ int MicroBitBLEManager::getBondCount()
 void MicroBitBLEManager::pairingRequested(ManagedString passKey)
 {
     MICROBIT_DEBUG_DMESG( "pairingRequested %s", passKey.toCharArray());
-    
+
     // Update our mode to display the passkey.
     this->passKey = passKey;
     this->pairingStatus = MICROBIT_BLE_PAIR_REQUEST;
@@ -569,17 +578,17 @@ bool MicroBitBLEManager::pairingComplete( int event)
 {
     if ( currentMode != MICROBIT_MODE_PAIRING)
         return true;
-    
+
     if ( this->pairingStatus & MICROBIT_BLE_PAIR_COMPLETE)
         return true;
-    
+
     switch ( event)
     {
         case MICROBIT_BLE_PAIR_FAILURE:
             MICROBIT_DEBUG_DMESG( "pairingComplete FAILURE");
             this->pairingStatus = MICROBIT_BLE_PAIR_COMPLETE;
             break;
-            
+
         case MICROBIT_BLE_PAIR_SUCCESS:
             MICROBIT_DEBUG_DMESG( "pairingComplete SUCCESS");
             this->pairingStatus = MICROBIT_BLE_PAIR_COMPLETE | MICROBIT_BLE_PAIR_SUCCESSFUL;
@@ -589,12 +598,12 @@ bool MicroBitBLEManager::pairingComplete( int event)
                 fiber_add_idle_component(this);
             }
             break;
-                
+
         case MICROBIT_BLE_PAIR_AUTH:
             MICROBIT_DEBUG_DMESG( "pairingComplete AUTH");
             pairingTime = system_timer_current_time();
             break;
-            
+
         case MICROBIT_BLE_PAIR_UPDATE:
             MICROBIT_DEBUG_DMESG( "pairingComplete UPDATE");
             if ( pairingTime)
@@ -610,11 +619,11 @@ bool MicroBitBLEManager::pairingComplete( int event)
                 pairingComplete( MICROBIT_BLE_PAIR_SUCCESS);
             }
             break;
-            
+
         default:
             break;
     }
-    
+
     return this->pairingStatus & MICROBIT_BLE_PAIR_COMPLETE;
 }
 
@@ -671,9 +680,9 @@ void MicroBitBLEManager::stopAdvertising()
 void MicroBitBLEManager::onDisconnect()
 {
     MICROBIT_DEBUG_DMESG( "onDisconnect");
-        
+
     MicroBitEvent(MICROBIT_ID_BLE, MICROBIT_BLE_EVT_DISCONNECTED);
-    
+
     if ( advertiseOnDisconnect && ble_conn_state_peripheral_conn_count() == 0)
         advertise();
 }
@@ -682,7 +691,7 @@ void MicroBitBLEManager::onDisconnect()
 
 /**
  * Determine if Bluetooth is connected
- * @return true if connected 
+ * @return true if connected
  */
 bool MicroBitBLEManager::getConnected()
 {
@@ -708,16 +717,16 @@ bool MicroBitBLEManager::getConnected()
 int MicroBitBLEManager::advertiseEddystoneUrl(const char* url, int8_t calibratedPower, bool connectable, uint16_t interval)
 {
     MICROBIT_DEBUG_DMESG( "advertiseEddystoneUrl");
-    
+
     uint8_t frameData[ MicroBitEddystone::frameSizeURL];
     uint16_t frameSize;
-    
+
     int ret = MicroBitEddystone::getInstance()->getURL( frameData, &frameSize, url, calibratedPower);
 
     if ( ret == MICROBIT_OK)
     {
       stopAdvertising();
-      
+
       microbit_ble_configureAdvertising( connectable, true /*discoverable*/, false /*whitelist*/, interval, MICROBIT_BLE_ADVERTISING_TIMEOUT, frameData + 2, frameSize - 2);
 
       advertise();
@@ -766,16 +775,16 @@ int MicroBitBLEManager::advertiseEddystoneUrl(ManagedString url, int8_t calibrat
 int MicroBitBLEManager::advertiseEddystoneUid(const char* uid_namespace, const char* uid_instance, int8_t calibratedPower, bool connectable, uint16_t interval)
 {
     MICROBIT_DEBUG_DMESG( "advertiseEddystoneUid");
-    
+
     uint8_t frameData[ MicroBitEddystone::frameSizeUID];
     uint16_t frameSize;
-    
+
     int ret = MicroBitEddystone::getInstance()->getUID( frameData, &frameSize, uid_namespace, uid_instance, calibratedPower);
 
     if ( ret == MICROBIT_OK)
     {
       stopAdvertising();
-      
+
       microbit_ble_configureAdvertising( connectable, true /*discoverable*/, false /*whitelist*/, interval, MICROBIT_BLE_ADVERTISING_TIMEOUT, frameData + 2, frameSize - 2);
 
       advertise();
@@ -800,7 +809,7 @@ int MicroBitBLEManager::advertiseEddystoneUid(const char* uid_namespace, const c
 void MicroBitBLEManager::pairingMode(MicroBitDisplay &display, Button &authorisationButton)
 {
     MICROBIT_DEBUG_DMESG( "pairingMode");
-    
+
     // Do not page this fiber!
     currentFiber->flags |= DEVICE_FIBER_FLAG_DO_NOT_PAGE;
 
@@ -809,7 +818,7 @@ void MicroBitBLEManager::pairingMode(MicroBitDisplay &display, Button &authorisa
     int fadeDirection = 0;
 
     currentMode = MICROBIT_MODE_PAIRING;
-    
+
     pairingTime = 0;
 
     stopAdvertising();
@@ -819,7 +828,7 @@ void MicroBitBLEManager::pairingMode(MicroBitDisplay &display, Button &authorisa
     MICROBIT_BLE_ECHK( pm_whitelist_set( NULL, 0));
     MICROBIT_BLE_ECHK( pm_device_identities_list_set( NULL, 0));
 #endif
-    
+
     microbit_ble_configureAdvertising( true /*connectable*/, true /*discoverable*/, false /*whitelist*/, 200, 0);
 
     advertise();
@@ -831,7 +840,7 @@ void MicroBitBLEManager::pairingMode(MicroBitDisplay &display, Button &authorisa
 
     // Display our name, visualised as a histogram in the display to aid identification.
     showNameHistogram(display);
-    
+
     while (1)
     {
         pairingComplete( MICROBIT_BLE_PAIR_CHECK);
@@ -870,16 +879,16 @@ void MicroBitBLEManager::pairingMode(MicroBitDisplay &display, Button &authorisa
             for (int i = 0; i < passKey.length(); i++)
             {
                 display.image.print(passKey.charAt(i), 0, 0);
-                
+
                 if ( pairingComplete( MICROBIT_BLE_PAIR_CHECK))
                     break;
-                
+
                 fiber_sleep(800);
                 display.clear();
 
                 if ( pairingComplete( MICROBIT_BLE_PAIR_CHECK))
                     break;
-                
+
                 fiber_sleep(200);
             }
 
@@ -1010,7 +1019,7 @@ void MicroBitBLEManager::showNameHistogram(MicroBitDisplay &display)
 void MicroBitBLEManager::restartInBLEMode()
 {
    MICROBIT_DEBUG_DMESG( "restartInBLEMode");
-   
+
     if ( storage)
     {
        KeyValuePair* RebootMode = storage->get("RebootMode");
@@ -1043,7 +1052,7 @@ uint8_t MicroBitBLEManager::getCurrentMode()
 bool MicroBitBLEManager::prepareForShutdown()
 {
     bool shutdownOK = true;
-        
+
     sd_ble_gap_adv_stop( m_adv_handle);
     setAdvertiseOnDisconnect( false);
 
@@ -1052,7 +1061,7 @@ bool MicroBitBLEManager::prepareForShutdown()
         shutdownOK = false;
         ble_conn_state_for_each_connected( microbit_ble_for_each_connected_disconnect, NULL);
     }
-    
+
     if ( shutdownOK)
     {
         if ( !shutdownTime)
@@ -1061,7 +1070,7 @@ bool MicroBitBLEManager::prepareForShutdown()
         if ( (system_timer_current_time() - shutdownTime) < MICROBIT_BLE_SHUTDOWN_DELAY)
             shutdownOK = false;
     }
-    
+
     return shutdownOK;
 }
 
@@ -1103,10 +1112,65 @@ int MicroBitBLEManager::setSleep(bool doSleep)
         if (wasEnabled & 64)    advertise();
         app_timer_resume();
     }
-   
+
     return DEVICE_OK;
 }
 
+int MicroBitBLEManager::startScanning()
+{
+    // Configure scan parameters
+    ble_gap_scan_params_t scan_params;
+    memset(&scan_params, 0, sizeof(scan_params));
+
+    scan_params.extended = 0;              // Use extended advertising
+    scan_params.active = 1;                // Active scanning (send scan requests)
+    scan_params.filter_policy = BLE_GAP_SCAN_FP_ACCEPT_ALL;  // Accept all advertising packets
+    scan_params.scan_phys = BLE_GAP_PHY_1MBPS;  // Scan on 1 Mbps PHY
+    scan_params.interval = 160;            // Scan interval: 100ms (160 * 0.625ms)
+    scan_params.window = 80;               // Scan window: 50ms (80 * 0.625ms)
+    scan_params.timeout = 0;               // No timeout (scan indefinitely)
+
+    // Setup scan buffer
+    ble_data_t scan_data = {
+        .p_data = scan_buffer,
+        .len = SCAN_BUFFER_SIZE
+    };
+
+    // Start scanning
+    uint32_t err_code = sd_ble_gap_scan_start(&scan_params, &scan_data);
+    log_string("scanning started");
+    return MICROBIT_BLE_ECHK(err_code);
+}
+
+int MicroBitBLEManager::stopScanning()
+{
+    uint32_t err_code = sd_ble_gap_scan_stop();
+    log_string("scanning stopped");
+    return MICROBIT_BLE_ECHK(err_code);
+}
+
+
+int MicroBitBLEManager::listenForDevice(ManagedString deviceName) {
+    MICROBIT_DEBUG_DMESG( "listenForDevice %s", deviceName.toCharArray());
+
+    // Store the device name to listen for
+    matchingDeviceName = deviceName;
+
+    // Start scanning for devices
+    return startScanning();
+}
+
+int MicroBitBLEManager::listenForDevice(ManagedBuffer macAddress) {
+    MICROBIT_DEBUG_DMESG( "listenForDevice %02X:%02X:%02X:%02X:%02X:%02X",
+                         macAddress[0], macAddress[1], macAddress[2],
+                         macAddress[3], macAddress[4], macAddress[5]);
+
+    // Store the MAC address to listen for
+    matchingDeviceAddress = macAddress;
+
+    // Start scanning for devices
+    return startScanning();
+}
 
 /**
 * Ensure service changed indication pending for all peers
@@ -1114,19 +1178,19 @@ int MicroBitBLEManager::setSleep(bool doSleep)
 void MicroBitBLEManager::servicesChanged()
 {
     MICROBIT_DEBUG_DMESG("servicesChanged");
-    
+
     // BLE DFU records service change needed before jumping to the bootloader
     // and the partial flashing service can call servicesChanged()
     // but MakeCode WebUSB flashing leaves the bond info intact
     // so it seems necessary to check this at every boot
     // TODO? Simply send services changed indication at every connection?
-    
+
     // Call pm_local_database_has_changed if required
-    
+
     m_pending = getBondCount();
     if ( m_pending <= 0)
         return;
-    
+
     // Check if any peer doesn't have service_changed_pending set
     bool                    needed = false;
     pm_peer_id_t            peer_id;
@@ -1193,7 +1257,7 @@ static void microbit_ble_configureAdvertising( bool connectable, bool discoverab
                                     ? BLE_GAP_ADV_FP_FILTER_BOTH
                                     : BLE_GAP_ADV_FP_ANY;
     gap_adv_params.primary_phy      = BLE_GAP_PHY_1MBPS;
-                
+
     ble_gap_adv_data_t  gap_adv_data;
     memset( &gap_adv_data, 0, sizeof( gap_adv_data));
     gap_adv_data.adv_data.p_data    = m_enc_advdata;
@@ -1213,7 +1277,7 @@ static void microbit_ble_configureAdvertising( bool connectable, bool discoverab
     advdata.flags     = !whitelist && discoverable
                       ? BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED | BLE_GAP_ADV_FLAG_LE_GENERAL_DISC_MODE
                       : BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED;
-            
+
     microbit_ble_configureAdvertising( connectable, discoverable, whitelist, interval_ms, timeout_seconds, &advdata);
 }
 
@@ -1225,7 +1289,7 @@ static void microbit_ble_configureAdvertising( bool connectable, bool discoverab
                                                uint8_t *frameData, uint16_t frameSize)
 {
     ble_uuid_t  esUuid = { 0xFEAA, BLE_UUID_TYPE_BLE};
-    
+
     ble_advdata_service_data_t service_data;
     memset( &service_data, 0, sizeof( service_data));
     service_data.service_uuid = esUuid.uuid;
@@ -1257,10 +1321,10 @@ static void microbit_ble_configureAdvertising( bool connectable, bool discoverab
 static void bleConnectionCallback( microbit_gaphandle_t handle)
 {
     MICROBIT_DEBUG_DMESG( "bleConnectionCallback %d", (int) handle);
-    
+
     if ( handle != BLE_CONN_HANDLE_INVALID)
         sd_ble_gap_tx_power_set( BLE_GAP_TX_POWER_ROLE_CONN, handle, MICROBIT_BLE_POWER_LEVEL[ m_power]);
-    
+
     MicroBitEvent(MICROBIT_ID_BLE, MICROBIT_BLE_EVT_CONNECTED);
 }
 
@@ -1268,23 +1332,20 @@ static void bleConnectionCallback( microbit_gaphandle_t handle)
 static void passkeyDisplayCallback( microbit_gaphandle_t handle, ManagedString passKey)
 {
     MICROBIT_DEBUG_DMESG( "passkeyDisplayCallback %d", (int) handle);
-    
+
     (void)handle; /* -Wunused-param */
 
     if (MicroBitBLEManager::manager)
         MicroBitBLEManager::manager->pairingRequested(passKey);
 }
 
-// NOTE: Event handlers may be called from SD_EVT_IRQHandler
-// TODO: Check what they call. Consider other dispatch modes
-
 /**
  * Callback for handling BLE events.
  */
 static void microbit_ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
 {
-    //MICROBIT_DEBUG_DMESG( "%d:microbit_ble_evt_handler %x %d", (int)system_timer_current_time(), (unsigned int) p_ble_evt->header.evt_id);
-    
+    // DMESG( "%d:microbit_ble_evt_handler %d", (int)system_timer_current_time(), (int) p_ble_evt->header.evt_id);
+
     switch (p_ble_evt->header.evt_id)
     {
         case BLE_GAP_EVT_DISCONNECTED:
@@ -1331,7 +1392,82 @@ static void microbit_ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_conte
                   MicroBitBLEManager::manager->pairingComplete( MICROBIT_BLE_PAIR_AUTH);
             }
             break;
-        
+        case BLE_GAP_EVT_ADV_REPORT:
+        {
+            const ble_gap_evt_adv_report_t* p_adv = &p_ble_evt->evt.gap_evt.params.adv_report;
+
+            // Check for matching device name
+            if (MicroBitBLEManager::manager && matchingDeviceName != ManagedString::EmptyString) {
+                uint8_t index = 0;
+                uint8_t* field_data = NULL;
+                uint8_t field_data_len = 0;
+                while (index < p_adv->data.len) {
+                    uint8_t field_length = p_adv->data.p_data[index];
+                    if (field_length == 0) break;  // End of data
+
+                    uint8_t field_type = p_adv->data.p_data[index + 1];
+
+
+                    switch (field_type) {
+                        case BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME:
+                            field_data = &p_adv->data.p_data[index + 2];
+                            field_data_len = field_length - 1;
+                            // field_data points to name, data_length bytes long
+                            break;
+                        case BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA:
+                            // Parse manufacturer data
+                            break;
+                        // ... other types
+                    }
+
+                    index += field_length + 1;
+                }
+
+                if (field_data != NULL) {
+                    ManagedString advName = ManagedString((const char*)field_data, field_data_len);
+
+                    MICROBIT_DEBUG_DMESG("%s [%02X:%02X:%02X:%02X:%02X:%02X]", advName.toCharArray(),
+                                 p_adv->peer_addr.addr[5], p_adv->peer_addr.addr[4], p_adv->peer_addr.addr[3],
+                                 p_adv->peer_addr.addr[2], p_adv->peer_addr.addr[1], p_adv->peer_addr.addr[0]);
+
+                    if (advName == matchingDeviceName) {
+                        MICROBIT_DEBUG_DMESG("Matching device name found!\n");
+
+                        // store the matching address for later connection
+                        matchingDeviceAddress = ManagedBuffer((uint8_t*)p_adv->peer_addr.addr, 6);
+                        MicroBitBLEManager::manager->stopScanning();
+                        MicroBitEvent(MICROBIT_ID_BLE, MICROBIT_BLE_EVT_DEVICE_FOUND);
+                        return;
+                    }
+                }
+            }
+
+            // Check for matching MAC address
+            if (MicroBitBLEManager::manager && matchingDeviceAddress.length() > 0) {
+                ManagedBuffer advAddress((uint8_t*)p_adv->peer_addr.addr, 6);
+
+                if (advAddress == matchingDeviceAddress) {
+                    MICROBIT_DEBUG_DMESG("Matching device address found!");
+                    // store the matching name for later use
+                    matchingDeviceName = ManagedString((const char*)p_adv->data.p_data, p_adv->data.len);
+                    MicroBitBLEManager::manager->stopScanning();
+                    MicroBitEvent(MICROBIT_ID_BLE, MICROBIT_BLE_EVT_DEVICE_FOUND);
+                    return;
+                }
+            }
+
+            // Continue scanning
+            ble_data_t resume_data = {
+                .p_data = scan_buffer,
+                .len = SCAN_BUFFER_SIZE
+            };
+            sd_ble_gap_scan_start(NULL, &resume_data);
+            break;
+        }
+
+        case BLE_GAP_EVT_TIMEOUT:
+            log_string("Scan timeout\n");
+            return;
         default:
             break;
     }
@@ -1378,7 +1514,7 @@ static void microbit_ble_pm_evt_handler(pm_evt_t const * p_evt)
             if ( MicroBitBLEManager::manager)
                 MicroBitBLEManager::manager->pairingComplete( MICROBIT_BLE_PAIR_UPDATE);
             break;
-        
+
         case PM_EVT_CONN_SEC_FAILED:
             MICROBIT_DEBUG_DMESG( "PM_EVT_CONN_SEC_FAILED");
             if ( MicroBitBLEManager::manager)
@@ -1392,7 +1528,7 @@ static void microbit_ble_pm_evt_handler(pm_evt_t const * p_evt)
             if ( MicroBitBLEManager::manager)
                 MicroBitBLEManager::manager->pairingComplete( MICROBIT_BLE_PAIR_UPDATE);
             break;
-        
+
         case PM_EVT_PEER_DATA_UPDATE_FAILED:
             MICROBIT_DEBUG_DMESG( "PM_EVT_PEER_DATA_UPDATE_FAILED %x", (unsigned int) p_evt->params.peer_data_update_failed.error);
             // This can happen if the SoftDevice is too busy with BLE operations.
@@ -1440,9 +1576,9 @@ static void microbit_ble_for_each_connected_tx_power_set( uint16_t conn_handle, 
 static bool microbit_ble_shutdown_handler(nrf_pwr_mgmt_evt_t event)
 {
     bool shutdownOK = true; // Allow the shutdown, unless other handlers object
-    
+
     MICROBIT_DEBUG_DMESG( "%d:microbit_ble_shutdown_handler %d", (int)system_timer_current_time(), (int) event);
-    
+
     switch (event)
     {
         case NRF_PWR_MGMT_EVT_PREPARE_RESET:
@@ -1452,7 +1588,7 @@ static bool microbit_ble_shutdown_handler(nrf_pwr_mgmt_evt_t event)
                 // Use idleCallback rather than a timer to restart the shutdown
                 MicroBitBLEManager::manager->status |= MICROBIT_BLE_STATUS_SHUTDOWN;
                 fiber_add_idle_component( MicroBitBLEManager::manager);
-                
+
                 shutdownOK = MicroBitBLEManager::manager->prepareForShutdown();
             }
 
@@ -1468,7 +1604,7 @@ static bool microbit_ble_shutdown_handler(nrf_pwr_mgmt_evt_t event)
         case NRF_PWR_MGMT_EVT_PREPARE_WAKEUP:
         case NRF_PWR_MGMT_EVT_PREPARE_SYSOFF:
             break;
-            
+
         default:
             break;
     }
@@ -1491,12 +1627,12 @@ NRF_PWR_MGMT_HANDLER_REGISTER( microbit_ble_shutdown_handler, 0);
 static bool microbit_ble_sdh_req_handler(nrf_sdh_req_evt_t req, void * /*p_context*/)
 {
     bool changeOK = true; // Allow the SoftDevice state change, unless other handlers object
-    
+
     switch ( req)
     {
         case NRF_SDH_EVT_ENABLE_REQUEST:
             break;
-            
+
         case NRF_SDH_EVT_DISABLE_REQUEST:
             if ( MicroBitBLEManager::manager)
             {
@@ -1513,7 +1649,7 @@ static bool microbit_ble_sdh_req_handler(nrf_sdh_req_evt_t req, void * /*p_conte
             }
             break;
     }
-    
+
     MICROBIT_DEBUG_DMESGF( "%d:microbit_ble_sdh_req_handler changeOK = %d", (int)system_timer_current_time(), (int) changeOK);
     return changeOK;
 }
